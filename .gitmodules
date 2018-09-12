@@ -1,0 +1,3 @@
+[submodule "src/bitLabCore"]
+	path = src/bitLabCore
+	url = https://github.com/BitLabProjects/bitLabCore.git
