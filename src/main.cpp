@@ -13,7 +13,7 @@ bitLabCore core;
 int main() {
   core.init();
   //core.addModule(new StoryboardPlayer(&relay_board, &triac_board));
-  core.addModule(new RingNetwork(USBTX, USBRX, core.getHardwareId()));
+  core.addModule(new RingNetwork(PA_11, PA_12, core.getHardwareId(), true));
   core.addModule(new MasterBoard());
   core.run();
 }

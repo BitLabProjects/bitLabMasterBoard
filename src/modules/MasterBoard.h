@@ -20,7 +20,20 @@ private:
   RingNetwork* ringNetwork;
   DigitalOut led;
 
-  void dataPacketReceived(RingPacket*, PTxAction*);
+  enum EState {
+    WaitAddressAssigned,
+    Idle,
+    Enumerate_Start,
+    Enumerate_WaitHello,
+    ToggleLed_Start,
+  };
+  EState state;
+  uint32_t freePacketsCount;
+
+  uint8_t enumeratedAddresses[10];
+  uint32_t enumeratedAddressesCount;
+
+  void onPacketReceived(RingPacket*, PTxAction*);
 };
 
 #endif
