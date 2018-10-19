@@ -1,8 +1,8 @@
 #include "bitLabCore\src\os\bitLabCore.h"
 #include "bitLabCore\src\net\RingNetwork.h"
+#include "bitLabCore\src\storyboard\StoryboardPlayer.h"
 #include "boards\triac_board.h"
 #include "boards\relay_board.h"
-#include "storyboard\storyboard_player.h"
 #include "modules\MasterBoard.h"
 
 bitLabCore core;
