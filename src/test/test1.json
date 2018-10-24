@@ -2,6 +2,7 @@
   "timelines": [
     {
       "name": "timeline1",
+      "outputHardwareId": 154578,
       "outputId": 1,
       "outputType": 0,
       "entries": [
@@ -24,6 +25,7 @@
     },
     {
       "name": "timeline2",
+      "outputHardwareId": 154578,
       "outputId": 2,
       "outputType": 1,
       "entries": [
@@ -46,6 +48,7 @@
     },
     {
       "name": "timeline3",
+      "outputHardwareId": 154578,
       "outputId": 3,
       "outputType": 1,
       "entries": [
@@ -68,6 +71,7 @@
     },
     {
       "name": "timeline4",
+      "outputHardwareId": 154578,
       "outputId": 4,
       "outputType": 1,
       "entries": [
@@ -90,6 +94,7 @@
     },
     {
       "name": "timeline5",
+      "outputHardwareId": 154578,
       "outputId": 5,
       "outputType": 1,
       "entries": [
@@ -112,6 +117,7 @@
     },
     {
       "name": "timeline6",
+      "outputHardwareId": 154578,
       "outputId": 6,
       "outputType": 1,
       "entries": [
@@ -134,6 +140,7 @@
     },
     {
       "name": "timeline7",
+      "outputHardwareId": 154578,
       "outputId": 7,
       "outputType": 1,
       "entries": [
@@ -156,6 +163,7 @@
     },
     {
       "name": "timeline8",
+      "outputHardwareId": 154578,
       "outputId": 8,
       "outputType": 1,
       "entries": [
