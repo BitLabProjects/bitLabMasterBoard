@@ -32,8 +32,12 @@ private:
     SendStoryboard_SendTimelines,
     CheckStoryboard_Start,
     CheckStoryboard_WaitCrc,
+    Play_Start,
+    Stop_Start,
   };
   EState state;
+  void goToState(EState newState);
+  void goToStateIdle();
   uint32_t freePacketsCount;
 
   struct EnumeratedDeviceInfo {
@@ -52,6 +56,10 @@ private:
   Storyboard storyboard;
 
   void onPacketReceived(RingPacket*, PTxAction*);
+
+  void mainLoop_checkForWaitStateTimeout();
+  millisec waitStateTimeout;
+  bool waitStateTimeoutEnabled;
 };
 
 #endif

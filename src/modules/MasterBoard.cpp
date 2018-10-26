@@ -1,6 +1,7 @@
 #include "MasterBoard.h"
 
 #include "..\bitLabCore\src\utils.h"
+#include "..\bitLabCore\src\storyboard\StoryboardLoader.h"
 
 Serial serial(USBTX, USBRX);
 
@@ -8,7 +9,9 @@ MasterBoard::MasterBoard() : led(LED2),
                              state(EState::WaitAddressAssigned),
                              freePacketsCount(0),
                              enumeratedAddressesCount(0),
-                             storyboard()
+                             storyboard(),
+                             waitStateTimeout(0),
+                             waitStateTimeoutEnabled(false)
 {
 }
 
@@ -31,9 +34,16 @@ void MasterBoard::mainLoop()
       serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
       serial.printf("Starting enumeration...\n");
       enumeratedAddressesCount = 0;
-      state = EState::Enumerate_Start;
+      goToState(EState::Enumerate_Start);
     }
   }
+
+  if (ringNetwork->getSilenceDetected())
+  {
+    serial.printf("Silence detected\n");
+  }
+
+  mainLoop_checkForWaitStateTimeout();
 
   if (serial.readable())
   {
@@ -47,20 +57,21 @@ void MasterBoard::mainLoop()
       {
         if (i > 0)
           serial.puts(", ");
-        serial.printf("addr:%i; hwId:%i; crc:%i", 
-                      enumeratedAddresses[i].address, 
+        serial.printf("addr:%i; hwId:%i; crc:%i",
+                      enumeratedAddresses[i].address,
                       enumeratedAddresses[i].hardwareId,
                       enumeratedAddresses[i].crcReceived);
       }
       serial.printf("]\n");
       serial.printf("Storyboard crc: %u\n", storyboard.calcCrc32(0));
+      serial.printf("Packet received: %i\n", ringNetwork->packetReceived() ? 1 : 0);
       serial.printf("Free packets: %i\n", freePacketsCount);
     }
     else if (strcmp(line, "toggleLed\n") == 0)
     {
       if (state == EState::Idle && enumeratedAddressesCount > 0)
       {
-        state = EState::ToggleLed_Start;
+        goToState(EState::ToggleLed_Start);
         serial.printf("Ok\n");
       }
       else
@@ -73,7 +84,7 @@ void MasterBoard::mainLoop()
       if (state == EState::Idle && enumeratedAddressesCount > 0)
       {
         currDeviceIdx = 0;
-        state = EState::SendStoryboard_Start;
+        goToState(EState::SendStoryboard_Start);
         serial.printf("Ok\n");
       }
       else
@@ -86,7 +97,69 @@ void MasterBoard::mainLoop()
       if (state == EState::Idle && enumeratedAddressesCount > 0)
       {
         currDeviceIdx = 0;
-        state = EState::CheckStoryboard_Start;
+        goToState(EState::CheckStoryboard_Start);
+        serial.printf("Ok\n");
+      }
+      else
+      {
+        serial.printf("Error\n");
+      }
+    }
+    else if (strcmp(line, "load\n") == 0)
+    {
+      if (state == EState::Idle && enumeratedAddressesCount > 0)
+      {
+        FILE *file = fopen("/sd/storyboard.json", "r");
+        if (file == NULL)
+        {
+          serial.printf("File not available\n");
+        }
+        else
+        {
+          fseek(file, 0, SEEK_END);
+          long fileSize = ftell(file);
+          fseek(file, 0, SEEK_SET);
+          serial.printf("Reading %i bytes\n", fileSize);
+
+          char *buff = new char[fileSize];
+          fread(buff, fileSize, 1, file);
+          fclose(file);
+
+          serial.printf("Parsing storyboard\n");
+          StoryboardLoader loader(&storyboard, buff);
+          loader.load();
+
+          serial.printf("Loaded %i timelines, duration: %i ms\n",
+                        storyboard.getTimelinesCount(),
+                        storyboard.getDuration());
+
+          serial.printf("Ok\n");
+        }
+      }
+      else
+      {
+        serial.printf("Error\n");
+      }
+    }
+    else if (strcmp(line, "play\n") == 0)
+    {
+      if (state == EState::Idle && enumeratedAddressesCount > 0)
+      {
+        currDeviceIdx = 0;
+        goToState(EState::Play_Start);
+        serial.printf("Ok\n");
+      }
+      else
+      {
+        serial.printf("Error\n");
+      }
+    }
+    else if (strcmp(line, "stop\n") == 0)
+    {
+      if (state == EState::Idle && enumeratedAddressesCount > 0)
+      {
+        currDeviceIdx = 0;
+        goToState(EState::Stop_Start);
         serial.printf("Ok\n");
       }
       else
@@ -102,8 +175,36 @@ void MasterBoard::mainLoop()
   }
 }
 
+void MasterBoard::mainLoop_checkForWaitStateTimeout()
+{
+  if (waitStateTimeoutEnabled)
+  {
+    if (waitStateTimeout == 0)
+    {
+      goToStateIdle();
+      serial.puts("Timeout\n");
+    }
+  }
+}
+
+void MasterBoard::goToState(EState newState)
+{
+  state = newState;
+  waitStateTimeout = 1000;
+  waitStateTimeoutEnabled = true;
+}
+void MasterBoard::goToStateIdle()
+{
+  state = EState::Idle;
+  waitStateTimeoutEnabled = false;
+  waitStateTimeout = 0;
+}
+
 void MasterBoard::tick(millisec timeDelta)
 {
+  waitStateTimeout -= timeDelta;
+  if (waitStateTimeout < 0)
+    waitStateTimeout = 0;
 }
 
 // TODO State machine timeout for waiting states
@@ -151,7 +252,8 @@ enum EMsgType
   SetStoryboardTime = 6,
   Play = 7,
   Pause = 8,
-  Stop = 9
+  Stop = 9,
+  DebugPrint = 255
 };
 
 void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
@@ -163,6 +265,24 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
   {
     freePacketsCount += 1;
   }
+  else
+  {
+    serial.printf("pkt> #%i %c src:%i dst:%i ttl:%i\n",
+                  p->header.data_size,
+                  p->isProtocolPacket() ? 'p' : 'd',
+                  p->header.src_address,
+                  p->header.dst_address,
+                  p->header.ttl);
+  }
+
+  if (p->isDataPacket(ringNetwork->getAddress(), 0, EMsgType::DebugPrint))
+  {
+    char *buff = (char *)&p->data[1];
+    buff[p->header.data_size - 2] = '\0';
+    serial.printf(buff);
+    return;
+  }
+
   // 1.Send a WhoAreYou packet with ttl from 1 to 11 and wait for the response Hello packet
   // 1. Send
   switch (state)
@@ -183,7 +303,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = enumeratedAddressesCount + 1;
       p->data[0] = RingNetworkProtocol::protocol_msgid_whoareyou;
       *pTxAction = PTxAction::Send;
-      state = EState::Enumerate_WaitHello;
+      goToState(EState::Enumerate_WaitHello);
       return;
     }
     break;
@@ -199,21 +319,21 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       bool isMyself = (src_address == ringNetwork->getAddress());
       if (isMyself)
       {
-        state = EState::Idle;
+        goToStateIdle();
       }
       else
       {
         enumeratedAddresses[enumeratedAddressesCount].address = src_address;
-        enumeratedAddresses[enumeratedAddressesCount].hardwareId = *((uint32_t *)&p->data[1]);
+        enumeratedAddresses[enumeratedAddressesCount].hardwareId = p->getDataUInt32(1);
         enumeratedAddresses[enumeratedAddressesCount].crcReceived = 0;
         enumeratedAddressesCount += 1;
         if (enumeratedAddressesCount == 10)
         {
-          state = EState::Idle;
+          goToStateIdle();
         }
         else
         {
-          state = EState::Enumerate_Start;
+          goToState(EState::Enumerate_Start);
         }
       }
       return;
@@ -232,7 +352,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->data[0] = EMsgType::SetLed;
       p->data[1] = ledState;
       *pTxAction = PTxAction::Send;
-      state = EState::Idle;
+      goToStateIdle();
       return;
     }
     break;
@@ -246,7 +366,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::CreateStoryboard;
       p->data[1] = 0; // timelines count, will be set later, we don't know yet
-      *((millisec *)&p->data[2]) = storyboard.getDuration();
+      p->setDataInt32(2, storyboard.getDuration());
 
       uint32_t timelinesCount = 0;
       for (uint8_t i = 0; i < storyboard.getTimelinesCount(); i++)
@@ -254,8 +374,9 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         auto t = storyboard.getTimelineByIdx(i);
         if (t->getOutputHardwareId() == enumeratedAddresses[currDeviceIdx].hardwareId)
         {
-          p->data[6 + timelinesCount * 2 + 0] = t->getOutputId();
-          p->data[6 + timelinesCount * 2 + 1] = t->getEntriesCount();
+          auto offset = 6 + timelinesCount * 2;
+          p->data[offset + 0] = t->getOutputId();
+          p->data[offset + 1] = t->getEntriesCount();
           timelinesCount += 1;
 
           // Never send more than 32 timelines, they won't fit.
@@ -267,13 +388,15 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         }
       }
 
+      serial.printf("Sending %i timelines\n", timelinesCount);
+
       // Now we know
       p->data[1] = timelinesCount;
       p->header.data_size = 6 + timelinesCount * 2;
 
       *pTxAction = PTxAction::Send;
       nextTimelineIdxMaybeToSend = 0;
-      state = EState::SendStoryboard_SendTimelines;
+      goToState(EState::SendStoryboard_SendTimelines);
     }
     break;
 
@@ -299,12 +422,12 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         if (currDeviceIdx == enumeratedAddressesCount - 1)
         {
           // No more devices, done
-          state = EState::Idle;
+          goToStateIdle();
         }
         else
         {
           currDeviceIdx += 1;
-          state = EState::SendStoryboard_Start;
+          goToState(EState::SendStoryboard_Start);
         }
       }
       else
@@ -320,13 +443,15 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         auto entryCountToSend = Utils::min(20, t->getEntriesCount());
         p->data[3] = entryCountToSend;
 
+        serial.printf("Sending %i entries\n", entryCountToSend);
+
         for (int i = 0; i < entryCountToSend; i++)
         {
           auto offset = 4 + i * 12;
           auto entry = t->getEntry(i);
-          *((millisec *)&p->data[offset + 0]) = entry->time;
-          *((int32_t *)&p->data[offset + 4]) = entry->value;
-          *((millisec *)&p->data[offset + 8]) = entry->duration;
+          p->setDataInt32(offset + 0, entry->time);
+          p->setDataInt32(offset + 4, entry->value);
+          p->setDataInt32(offset + 8, entry->duration);
         }
         p->header.data_size = 4 + entryCountToSend * 12;
 
@@ -348,7 +473,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::GetStoryboardChecksum;
       *pTxAction = PTxAction::Send;
-      state = EState::CheckStoryboard_WaitCrc;
+      goToState(EState::CheckStoryboard_WaitCrc);
     }
     break;
 
@@ -359,12 +484,40 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
 
       if (currDeviceIdx == enumeratedAddressesCount - 1)
       {
-        state = EState::Idle;
+        goToStateIdle();
       }
       else
       {
-        state = EState::CheckStoryboard_Start;
+        goToState(EState::CheckStoryboard_Start);
       }
+    }
+    break;
+
+  case EState::Play_Start:
+    if (isFree)
+    {
+      p->header.data_size = 1;
+      p->header.control = 1;
+      p->header.src_address = ringNetwork->getAddress();
+      p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+      p->header.ttl = RingNetworkProtocol::ttl_max;
+      p->data[0] = EMsgType::Play;
+      *pTxAction = PTxAction::Send;
+      goToStateIdle();
+    }
+    break;
+
+  case EState::Stop_Start:
+    if (isFree)
+    {
+      p->header.data_size = 1;
+      p->header.control = 1;
+      p->header.src_address = ringNetwork->getAddress();
+      p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+      p->header.ttl = RingNetworkProtocol::ttl_max;
+      p->data[0] = EMsgType::Stop;
+      *pTxAction = PTxAction::Send;
+      goToStateIdle();
     }
     break;
   }

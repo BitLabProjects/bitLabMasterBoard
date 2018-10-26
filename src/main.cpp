@@ -6,14 +6,12 @@
 #include "modules\MasterBoard.h"
 
 bitLabCore core;
-
-//RelayBoard relay_board;
-//TriacBoard triac_board;
+RingNetwork rn(PA_11, PA_12, true);
+MasterBoard mb;
 
 int main() {
   core.init();
-  //core.addModule(new StoryboardPlayer(&relay_board, &triac_board));
-  core.addModule(new RingNetwork(PA_11, PA_12, core.getHardwareId(), true));
-  core.addModule(new MasterBoard());
+  core.addModule(&rn);
+  core.addModule(&mb);
   core.run();
 }
