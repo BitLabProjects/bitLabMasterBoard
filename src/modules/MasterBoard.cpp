@@ -28,7 +28,6 @@ void MasterBoard::mainLoop()
 {
   if (state == EState::WaitAddressAssigned)
   {
-    //serial.puts("W\n");
     if (ringNetwork->isAddressAssigned())
     {
       serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
@@ -57,7 +56,7 @@ void MasterBoard::mainLoop()
       {
         if (i > 0)
           serial.puts(", ");
-        serial.printf("addr:%i; hwId:%i; crc:%i",
+        serial.printf("addr:%i; hwId:%u; crc:%u",
                       enumeratedAddresses[i].address,
                       enumeratedAddresses[i].hardwareId,
                       enumeratedAddresses[i].crcReceived);
@@ -414,6 +413,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         {
           found = true;
           idxTimelineToSend = i;
+          break;
         }
       }
 
