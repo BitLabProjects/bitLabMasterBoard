@@ -48,6 +48,8 @@ void MasterBoard::mainLoop()
   {
     char line[128];
     serial.gets(line, 127);
+    
+    bool commandIsOk = true;
     if (strcmp(line, "state\n") == 0)
     {
       serial.printf("Address: %i\n", ringNetwork->getAddress());
@@ -75,6 +77,7 @@ void MasterBoard::mainLoop()
       }
       else
       {
+        commandIsOk = false;
         serial.printf("Error\n");
       }
     }
@@ -84,11 +87,10 @@ void MasterBoard::mainLoop()
       {
         currDeviceIdx = 0;
         goToState(EState::SendStoryboard_Start);
-        serial.printf("Ok\n");
       }
       else
       {
-        serial.printf("Error\n");
+        commandIsOk = false;
       }
     }
     else if (strcmp(line, "check\n") == 0)
@@ -97,11 +99,10 @@ void MasterBoard::mainLoop()
       {
         currDeviceIdx = 0;
         goToState(EState::CheckStoryboard_Start);
-        serial.printf("Ok\n");
       }
       else
       {
-        serial.printf("Error\n");
+        commandIsOk = false;
       }
     }
     else if (strcmp(line, "load\n") == 0)
@@ -112,6 +113,7 @@ void MasterBoard::mainLoop()
         if (file == NULL)
         {
           serial.printf("File not available\n");
+          commandIsOk = false;
         }
         else
         {
@@ -131,13 +133,11 @@ void MasterBoard::mainLoop()
           serial.printf("Loaded %i timelines, duration: %i ms\n",
                         storyboard.getTimelinesCount(),
                         storyboard.getDuration());
-
-          serial.printf("Ok\n");
         }
       }
       else
       {
-        serial.printf("Error\n");
+        commandIsOk = false;
       }
     }
     else if (strcmp(line, "play\n") == 0)
@@ -146,11 +146,10 @@ void MasterBoard::mainLoop()
       {
         currDeviceIdx = 0;
         goToState(EState::Play_Start);
-        serial.printf("Ok\n");
       }
       else
       {
-        serial.printf("Error\n");
+        commandIsOk = false;
       }
     }
     else if (strcmp(line, "stop\n") == 0)
@@ -159,18 +158,23 @@ void MasterBoard::mainLoop()
       {
         currDeviceIdx = 0;
         goToState(EState::Stop_Start);
-        serial.printf("Ok\n");
       }
       else
       {
-        serial.printf("Error\n");
+        commandIsOk = false;
       }
     }
     else
     {
       serial.puts("Command unrecognized\n");
+      commandIsOk = false;
     }
-    serial.puts("\n");
+
+    if (commandIsOk) {
+      serial.printf("Ok\n\n");
+    } else {
+      serial.printf("Error\n\n");
+    }
   }
 }
 
