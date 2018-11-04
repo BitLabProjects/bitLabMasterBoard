@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "..\bitLabCore\src\Utils.h"
+
 CommandParser::CommandParser() : tokensCount(0)
 {
 }
@@ -60,8 +62,17 @@ bool CommandParser::tryParse()
   return tokensCount > 0;
 }
 
-bool CommandParser::isCommand(const char* cmd)
+bool CommandParser::isCommand(const char *cmd)
 {
-  if (tokensCount < 1) return false;
+  if (tokensCount < 1)
+    return false;
   return strncmp(cmd, &line[tokens[0].idxStart], tokens[0].length);
+}
+
+bool CommandParser::tryParseUInt32(uint32_t argIdx, uint32_t &value)
+{
+  if (argIdx < 1 || argIdx >= tokensCount)
+    return false;
+
+  return Utils::strTryParse(&line[tokens[0].idxStart], tokens[0].length, value, 10);
 }

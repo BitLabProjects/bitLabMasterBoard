@@ -19,7 +19,11 @@ public:
   bool tryParse();
   inline uint32_t getTokensCount() { return tokensCount; }
   inline void getToken(uint32_t i, Token& token) { token = tokens[i]; }
+
   bool isCommand(const char* cmd);
+  // + 1 because the first token is always the command name
+  bool argsCountIs(uint32_t argCount) { return tokensCount == argCount + 1; }
+  bool tryParseUInt32(uint32_t argIdx, uint32_t &value);
 
 private:
   const static uint32_t tokensSize = 64;

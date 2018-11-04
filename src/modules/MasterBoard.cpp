@@ -8,6 +8,10 @@ Serial serial(USBTX, USBRX);
 
 MasterBoard::MasterBoard() : led(LED2),
                              state(EState::WaitAddressAssigned),
+                             state_currDeviceIdx(0),
+                             state_nextTimelineIdxMaybeToSend(0),
+                             stateArg_OutputId(0),
+                             stateArg_Value(0),
                              freePacketsCount(0),
                              enumeratedAddressesCount(0),
                              storyboard(),
@@ -133,14 +137,28 @@ void MasterBoard::mainLoop()
       }
       else if (cp.isCommand("setOutput"))
       {
-        if (isIdleAndHasDevices())
+        // Format:
+        // setOutput <hardwareId: ui32> <outputId: ui8> <value: [0-4095]>
+        commandIsOk = false;
+        if (cp.argsCountIs(3))
         {
-          // TODO
-          commandIsOk = false;
-        }
-        else
-        {
-          commandIsOk = false;
+          uint32_t hardwareId, outputId, value;
+          if (cp.tryParseUInt32(1, hardwareId) &&
+              cp.tryParseUInt32(2, outputId) &&
+              cp.tryParseUInt32(3, value))
+          {
+            auto deviceIdx = findDeviceByHardwareId(hardwareId);
+            if (deviceIdx >= 0)
+            {
+              stateArg_OutputId = outputId;
+              stateArg_Value = value;
+              commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::SetOutput_Start, deviceIdx);
+            }
+            else
+            {
+              serial.printf("Could not find device\n");
+            }
+          }
         }
       }
 
@@ -168,6 +186,16 @@ void MasterBoard::mainLoop_checkForWaitStateTimeout()
   }
 }
 
+int32_t MasterBoard::findDeviceByHardwareId(uint32_t hardwareId)
+{
+  for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
+  {
+    if (enumeratedAddresses[i].hardwareId == hardwareId)
+      return i;
+  }
+  return -1;
+}
+
 void MasterBoard::goToState(EState newState)
 {
   state = newState;
@@ -180,11 +208,11 @@ void MasterBoard::goToStateIdle()
   waitStateTimeoutEnabled = false;
   waitStateTimeout = 0;
 }
-bool MasterBoard::tryGoToStateIfIdleAndHasDevices(EState newState)
+bool MasterBoard::tryGoToStateIfIdleAndHasDevices(EState newState, uint32_t currDeviceIdx)
 {
   if (isIdleAndHasDevices())
   {
-    currDeviceIdx = 0;
+    state_currDeviceIdx = currDeviceIdx;
     goToState(newState);
     return true;
   }
@@ -247,6 +275,7 @@ enum EMsgType
   Play = 7,
   Pause = 8,
   Stop = 9,
+  SetOutput = 10,
   DebugPrint = 255
 };
 
@@ -356,7 +385,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
     {
       p->header.control = 1;
       p->header.src_address = ringNetwork->getAddress();
-      p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::CreateStoryboard;
       p->data[1] = 0; // timelines count, will be set later, we don't know yet
@@ -366,7 +395,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       for (uint8_t i = 0; i < storyboard.getTimelinesCount(); i++)
       {
         auto t = storyboard.getTimelineByIdx(i);
-        if (t->getOutputHardwareId() == enumeratedAddresses[currDeviceIdx].hardwareId)
+        if (t->getOutputHardwareId() == enumeratedAddresses[state_currDeviceIdx].hardwareId)
         {
           auto offset = 6 + timelinesCount * 2;
           p->data[offset + 0] = t->getOutputId();
@@ -389,7 +418,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.data_size = 6 + timelinesCount * 2;
 
       *pTxAction = PTxAction::Send;
-      nextTimelineIdxMaybeToSend = 0;
+      state_nextTimelineIdxMaybeToSend = 0;
       goToState(EState::SendStoryboard_SendTimelines);
     }
     break;
@@ -401,10 +430,10 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       Timeline *t;
       uint8_t idxTimelineToSend;
       bool found = false;
-      for (uint8_t i = nextTimelineIdxMaybeToSend; i < storyboard.getTimelinesCount(); i++)
+      for (uint8_t i = state_nextTimelineIdxMaybeToSend; i < storyboard.getTimelinesCount(); i++)
       {
         t = storyboard.getTimelineByIdx(i);
-        if (t->getOutputHardwareId() == enumeratedAddresses[currDeviceIdx].hardwareId)
+        if (t->getOutputHardwareId() == enumeratedAddresses[state_currDeviceIdx].hardwareId)
         {
           found = true;
           idxTimelineToSend = i;
@@ -414,14 +443,14 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
 
       if (!found)
       {
-        if (currDeviceIdx == enumeratedAddressesCount - 1)
+        if (state_currDeviceIdx == enumeratedAddressesCount - 1)
         {
           // No more devices, done
           goToStateIdle();
         }
         else
         {
-          currDeviceIdx += 1;
+          state_currDeviceIdx += 1;
           goToState(EState::SendStoryboard_Start);
         }
       }
@@ -429,7 +458,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       {
         p->header.control = 1;
         p->header.src_address = ringNetwork->getAddress();
-        p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+        p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
         p->header.ttl = RingNetworkProtocol::ttl_max;
         p->data[0] = EMsgType::SetTimelineEntries;
         p->data[1] = t->getOutputId();
@@ -453,7 +482,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         *pTxAction = PTxAction::Send;
 
         // Stay in EState::SendStoryboard_SendTimelines state
-        nextTimelineIdxMaybeToSend = idxTimelineToSend + 1;
+        state_nextTimelineIdxMaybeToSend = idxTimelineToSend + 1;
       }
     }
     break;
@@ -464,7 +493,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.data_size = 1;
       p->header.control = 1;
       p->header.src_address = ringNetwork->getAddress();
-      p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::GetStoryboardChecksum;
       *pTxAction = PTxAction::Send;
@@ -475,15 +504,15 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
   case EState::CheckStoryboard_WaitCrc:
     if (p->isDataPacket(ringNetwork->getAddress(), 1 + 4, EMsgType::TellStoryboardChecksum))
     {
-      enumeratedAddresses[currDeviceIdx].crcReceived = p->getDataUInt32(1);
+      enumeratedAddresses[state_currDeviceIdx].crcReceived = p->getDataUInt32(1);
 
-      if (currDeviceIdx == enumeratedAddressesCount - 1)
+      if (state_currDeviceIdx == enumeratedAddressesCount - 1)
       {
         goToStateIdle();
       }
       else
       {
-        currDeviceIdx += 1;
+        state_currDeviceIdx += 1;
         goToState(EState::CheckStoryboard_Start);
       }
     }
@@ -495,7 +524,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.data_size = 1;
       p->header.control = 1;
       p->header.src_address = ringNetwork->getAddress();
-      p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::Play;
       *pTxAction = PTxAction::Send;
@@ -509,9 +538,24 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.data_size = 1;
       p->header.control = 1;
       p->header.src_address = ringNetwork->getAddress();
-      p->header.dst_address = enumeratedAddresses[currDeviceIdx].address;
+      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::Stop;
+      *pTxAction = PTxAction::Send;
+      goToStateIdle();
+    }
+    break;
+  case EState::SetOutput_Start:
+    if (isFree)
+    {
+      p->header.data_size = 1 + 1 + 4;
+      p->header.control = 1;
+      p->header.src_address = ringNetwork->getAddress();
+      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
+      p->header.ttl = RingNetworkProtocol::ttl_max;
+      p->data[0] = EMsgType::SetOutput;
+      p->data[1] = stateArg_OutputId;
+      p->setDataUInt32(2, stateArg_Value);
       *pTxAction = PTxAction::Send;
       goToStateIdle();
     }

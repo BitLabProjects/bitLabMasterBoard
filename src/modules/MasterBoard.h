@@ -34,11 +34,19 @@ private:
     CheckStoryboard_WaitCrc,
     Play_Start,
     Stop_Start,
+    SetOutput_Start,
   };
   EState state;
+
+  // data variables for the state machine
+  uint32_t state_currDeviceIdx;
+  uint8_t state_nextTimelineIdxMaybeToSend;
+  uint8_t stateArg_OutputId; // setOutput
+  uint32_t stateArg_Value; // setOutput
+
   void goToState(EState newState);
   void goToStateIdle();
-  bool tryGoToStateIfIdleAndHasDevices(EState newState);
+  bool tryGoToStateIfIdleAndHasDevices(EState newState, uint32_t currDeviceIdx = 0);
   uint32_t freePacketsCount;
 
   struct EnumeratedDeviceInfo {
@@ -50,10 +58,7 @@ private:
   EnumeratedDeviceInfo enumeratedAddresses[10];
   uint32_t enumeratedAddressesCount;
   inline bool isIdleAndHasDevices() { return state == EState::Idle && enumeratedAddressesCount > 0; }
-
-  // data variables for the state machine
-  uint32_t currDeviceIdx;
-  uint8_t nextTimelineIdxMaybeToSend;
+  int32_t findDeviceByHardwareId(uint32_t hardwareId);
 
   Storyboard storyboard;
 
