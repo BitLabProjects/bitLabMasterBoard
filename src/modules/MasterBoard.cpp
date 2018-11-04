@@ -1,4 +1,5 @@
 #include "MasterBoard.h"
+#include "CommandParser.h"
 
 #include "..\bitLabCore\src\utils.h"
 #include "..\bitLabCore\src\storyboard\StoryboardLoader.h"
@@ -46,134 +47,111 @@ void MasterBoard::mainLoop()
 
   if (serial.readable())
   {
-    char line[128];
-    serial.gets(line, 127);
-    
-    bool commandIsOk = true;
-    if (strcmp(line, "state\n") == 0)
+    CommandParser cp;
+    serial.gets(cp.line, cp.lineSize);
+
+    if (!cp.tryParse())
     {
-      serial.printf("Address: %i\n", ringNetwork->getAddress());
-      serial.printf("Enumerated devices: [");
-      for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
-      {
-        if (i > 0)
-          serial.puts(", ");
-        serial.printf("addr:%i; hwId:%u; crc:%u",
-                      enumeratedAddresses[i].address,
-                      enumeratedAddresses[i].hardwareId,
-                      enumeratedAddresses[i].crcReceived);
-      }
-      serial.printf("]\n");
-      serial.printf("Storyboard crc: %u\n", storyboard.calcCrc32(0));
-      serial.printf("Packet received: %i\n", ringNetwork->packetReceived() ? 1 : 0);
-      serial.printf("Free packets: %i\n", freePacketsCount);
+      serial.printf("Invalid command format\n\n");
     }
-    else if (strcmp(line, "toggleLed\n") == 0)
+    else
     {
-      if (state == EState::Idle && enumeratedAddressesCount > 0)
+      bool commandIsOk = true;
+      // The first token is the command name
+      if (cp.isCommand("state"))
       {
-        goToState(EState::ToggleLed_Start);
-        serial.printf("Ok\n");
-      }
-      else
-      {
-        commandIsOk = false;
-        serial.printf("Error\n");
-      }
-    }
-    else if (strcmp(line, "upload\n") == 0)
-    {
-      if (state == EState::Idle && enumeratedAddressesCount > 0)
-      {
-        currDeviceIdx = 0;
-        goToState(EState::SendStoryboard_Start);
-      }
-      else
-      {
-        commandIsOk = false;
-      }
-    }
-    else if (strcmp(line, "check\n") == 0)
-    {
-      if (state == EState::Idle && enumeratedAddressesCount > 0)
-      {
-        currDeviceIdx = 0;
-        goToState(EState::CheckStoryboard_Start);
-      }
-      else
-      {
-        commandIsOk = false;
-      }
-    }
-    else if (strcmp(line, "load\n") == 0)
-    {
-      if (state == EState::Idle && enumeratedAddressesCount > 0)
-      {
-        FILE *file = fopen("/sd/storyboard.json", "r");
-        if (file == NULL)
+        serial.printf("Address: %i\n", ringNetwork->getAddress());
+        serial.printf("Enumerated devices: [");
+        for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
         {
-          serial.printf("File not available\n");
+          if (i > 0)
+            serial.puts(", ");
+          serial.printf("addr:%i; hwId:%u; crc:%u",
+                        enumeratedAddresses[i].address,
+                        enumeratedAddresses[i].hardwareId,
+                        enumeratedAddresses[i].crcReceived);
+        }
+        serial.printf("]\n");
+        serial.printf("Storyboard crc: %u\n", storyboard.calcCrc32(0));
+        serial.printf("Packet received: %i\n", ringNetwork->packetReceived() ? 1 : 0);
+        serial.printf("Free packets: %i\n", freePacketsCount);
+      }
+      else if (cp.isCommand("toggleLed"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::ToggleLed_Start);
+      }
+      else if (cp.isCommand("upload"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::SendStoryboard_Start);
+      }
+      else if (cp.isCommand("check"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::CheckStoryboard_Start);
+      }
+      else if (cp.isCommand("load"))
+      {
+        if (state == EState::Idle)
+        {
+          FILE *file = fopen("/sd/storyboard.json", "r");
+          if (file == NULL)
+          {
+            serial.printf("File not available\n");
+            commandIsOk = false;
+          }
+          else
+          {
+            fseek(file, 0, SEEK_END);
+            long fileSize = ftell(file);
+            fseek(file, 0, SEEK_SET);
+            serial.printf("Reading %i bytes\n", fileSize);
+
+            char *buff = new char[fileSize];
+            fread(buff, fileSize, 1, file);
+            fclose(file);
+
+            serial.printf("Parsing storyboard\n");
+            StoryboardLoader loader(&storyboard, buff);
+            loader.load();
+
+            serial.printf("Loaded %i timelines, duration: %i ms\n",
+                          storyboard.getTimelinesCount(),
+                          storyboard.getDuration());
+          }
+        }
+        else
+        {
+          commandIsOk = false;
+        }
+      }
+      else if (cp.isCommand("play"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Play_Start);
+      }
+      else if (cp.isCommand("stop"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Stop_Start);
+      }
+      else if (cp.isCommand("setOutput"))
+      {
+        if (isIdleAndHasDevices())
+        {
+          // TODO
           commandIsOk = false;
         }
         else
         {
-          fseek(file, 0, SEEK_END);
-          long fileSize = ftell(file);
-          fseek(file, 0, SEEK_SET);
-          serial.printf("Reading %i bytes\n", fileSize);
-
-          char *buff = new char[fileSize];
-          fread(buff, fileSize, 1, file);
-          fclose(file);
-
-          serial.printf("Parsing storyboard\n");
-          StoryboardLoader loader(&storyboard, buff);
-          loader.load();
-
-          serial.printf("Loaded %i timelines, duration: %i ms\n",
-                        storyboard.getTimelinesCount(),
-                        storyboard.getDuration());
+          commandIsOk = false;
         }
       }
-      else
-      {
-        commandIsOk = false;
-      }
-    }
-    else if (strcmp(line, "play\n") == 0)
-    {
-      if (state == EState::Idle && enumeratedAddressesCount > 0)
-      {
-        currDeviceIdx = 0;
-        goToState(EState::Play_Start);
-      }
-      else
-      {
-        commandIsOk = false;
-      }
-    }
-    else if (strcmp(line, "stop\n") == 0)
-    {
-      if (state == EState::Idle && enumeratedAddressesCount > 0)
-      {
-        currDeviceIdx = 0;
-        goToState(EState::Stop_Start);
-      }
-      else
-      {
-        commandIsOk = false;
-      }
-    }
-    else
-    {
-      serial.puts("Command unrecognized\n");
-      commandIsOk = false;
-    }
 
-    if (commandIsOk) {
-      serial.printf("Ok\n\n");
-    } else {
-      serial.printf("Error\n\n");
+      if (commandIsOk)
+      {
+        serial.printf("Ok\n\n");
+      }
+      else
+      {
+        serial.printf("Error\n\n");
+      }
     }
   }
 }
@@ -201,6 +179,19 @@ void MasterBoard::goToStateIdle()
   state = EState::Idle;
   waitStateTimeoutEnabled = false;
   waitStateTimeout = 0;
+}
+bool MasterBoard::tryGoToStateIfIdleAndHasDevices(EState newState)
+{
+  if (isIdleAndHasDevices())
+  {
+    currDeviceIdx = 0;
+    goToState(newState);
+    return true;
+  }
+  else
+  {
+    return false;
+  }
 }
 
 void MasterBoard::tick(millisec timeDelta)
@@ -492,6 +483,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       }
       else
       {
+        currDeviceIdx += 1;
         goToState(EState::CheckStoryboard_Start);
       }
     }

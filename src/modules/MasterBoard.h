@@ -38,6 +38,7 @@ private:
   EState state;
   void goToState(EState newState);
   void goToStateIdle();
+  bool tryGoToStateIfIdleAndHasDevices(EState newState);
   uint32_t freePacketsCount;
 
   struct EnumeratedDeviceInfo {
@@ -48,6 +49,7 @@ private:
 
   EnumeratedDeviceInfo enumeratedAddresses[10];
   uint32_t enumeratedAddressesCount;
+  inline bool isIdleAndHasDevices() { return state == EState::Idle && enumeratedAddressesCount > 0; }
 
   // data variables for the state machine
   uint32_t currDeviceIdx;
