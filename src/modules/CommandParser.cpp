@@ -46,7 +46,10 @@ bool CommandParser::tryParse()
     }
 
     ptrCurr = ptrSeparator;
-    if (*ptrSeparator == ' ')
+    bool isSpace = (*ptrSeparator == ' ');
+    // Replace the space, the \n or the \0 with a \0, so the token content can be used like a c string
+    *ptrSeparator = '\0';
+    if (isSpace)
     {
       // The separator was found, skip it and search another token
       ptrCurr += 1;
@@ -66,13 +69,29 @@ bool CommandParser::isCommand(const char *cmd)
 {
   if (tokensCount < 1)
     return false;
-  return strncmp(cmd, &line[tokens[0].idxStart], tokens[0].length);
+  return strncmp(cmd, &line[tokens[0].idxStart], tokens[0].length) == 0;
 }
 
-bool CommandParser::tryParseUInt32(uint32_t argIdx, uint32_t &value)
+bool CommandParser::tryParseUInt32(uint32_t tokenIdx, uint32_t &value, uint32_t base)
 {
-  if (argIdx < 1 || argIdx >= tokensCount)
+  if (tokenIdx >= tokensCount)
     return false;
 
-  return Utils::strTryParse(&line[tokens[0].idxStart], tokens[0].length, value, 10);
+  return Utils::strTryParse(&line[tokens[tokenIdx].idxStart], tokens[tokenIdx].length, value, base);
+}
+
+const char* CommandParser::getTokenString(uint32_t tokenIdx)
+{
+  if (tokenIdx >= tokensCount)
+    return NULL;
+
+  return &line[tokens[tokenIdx].idxStart];
+}
+
+uint32_t CommandParser::getTokenLength(uint32_t tokenIdx)
+{
+  if (tokenIdx >= tokensCount)
+    return 0;
+
+  return tokens[tokenIdx].length;
 }

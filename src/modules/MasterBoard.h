@@ -22,6 +22,11 @@ private:
   RingNetwork* ringNetwork;
   DigitalOut led;
 
+  millisec upTime;
+
+  // Serial protocol state
+  FILE *openFile;
+
   enum EState {
     WaitAddressAssigned,
     Idle,

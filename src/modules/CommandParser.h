@@ -13,7 +13,7 @@ class CommandParser
 public:
   CommandParser();
 
-  const static uint32_t lineSize = 128;
+  const static uint32_t lineSize = 256;
   char line[lineSize];
 
   bool tryParse();
@@ -23,10 +23,12 @@ public:
   bool isCommand(const char* cmd);
   // + 1 because the first token is always the command name
   bool argsCountIs(uint32_t argCount) { return tokensCount == argCount + 1; }
-  bool tryParseUInt32(uint32_t argIdx, uint32_t &value);
+  bool tryParseUInt32(uint32_t tokenIdx, uint32_t &value, uint32_t base = 10);
+  const char* getTokenString(uint32_t tokenIdx);
+  uint32_t getTokenLength(uint32_t tokenIdx);
 
 private:
-  const static uint32_t tokensSize = 64;
+  const static uint32_t tokensSize = 128;
   Token tokens[tokensSize];
   uint32_t tokensCount;
 };

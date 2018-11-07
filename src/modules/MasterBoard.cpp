@@ -7,6 +7,8 @@
 Serial serial(USBTX, USBRX);
 
 MasterBoard::MasterBoard() : led(LED2),
+                             upTime(0),
+                             openFile(NULL),
                              state(EState::WaitAddressAssigned),
                              state_currDeviceIdx(0),
                              state_nextTimelineIdxMaybeToSend(0),
@@ -44,7 +46,7 @@ void MasterBoard::mainLoop()
 
   if (ringNetwork->getSilenceDetected())
   {
-    serial.printf("Silence detected\n");
+    //serial.printf("Silence detected\n");
   }
 
   mainLoop_checkForWaitStateTimeout();
@@ -60,10 +62,13 @@ void MasterBoard::mainLoop()
     }
     else
     {
+      //serial.printf("cmd: <%s>x%u", cp.getTokenString(0), cp.getTokenLength(0));
       bool commandIsOk = true;
       // The first token is the command name
       if (cp.isCommand("state"))
       {
+        serial.printf("Up time: %u sec\n", upTime / 1000);
+        serial.printf("Free packets: %u\n", freePacketsCount);
         serial.printf("Address: %i\n", ringNetwork->getAddress());
         serial.printf("Enumerated devices: [");
         for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
@@ -77,20 +82,10 @@ void MasterBoard::mainLoop()
         }
         serial.printf("]\n");
         serial.printf("Storyboard crc: %u\n", storyboard.calcCrc32(0));
-        serial.printf("Packet received: %i\n", ringNetwork->packetReceived() ? 1 : 0);
-        serial.printf("Free packets: %i\n", freePacketsCount);
       }
       else if (cp.isCommand("toggleLed"))
       {
         commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::ToggleLed_Start);
-      }
-      else if (cp.isCommand("upload"))
-      {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::SendStoryboard_Start);
-      }
-      else if (cp.isCommand("check"))
-      {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::CheckStoryboard_Start);
       }
       else if (cp.isCommand("load"))
       {
@@ -127,6 +122,14 @@ void MasterBoard::mainLoop()
           commandIsOk = false;
         }
       }
+      else if (cp.isCommand("upload"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::SendStoryboard_Start);
+      }
+      else if (cp.isCommand("check"))
+      {
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::CheckStoryboard_Start);
+      }
       else if (cp.isCommand("play"))
       {
         commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Play_Start);
@@ -143,7 +146,7 @@ void MasterBoard::mainLoop()
         if (cp.argsCountIs(3))
         {
           uint32_t hardwareId, outputId, value;
-          if (cp.tryParseUInt32(1, hardwareId) &&
+          if (cp.tryParseUInt32(1, hardwareId, 16) &&
               cp.tryParseUInt32(2, outputId) &&
               cp.tryParseUInt32(3, value))
           {
@@ -158,6 +161,72 @@ void MasterBoard::mainLoop()
             {
               serial.printf("Could not find device\n");
             }
+          }
+        }
+      }
+      else if (cp.isCommand("openFile"))
+      {
+        // Format:
+        // openFile <fileName>
+        commandIsOk = false;
+        if (cp.argsCountIs(1))
+        {
+          if (openFile != NULL)
+          {
+            serial.printf("A file is already open\n");
+          }
+          else
+          {
+            auto path = cp.getTokenString(1);
+            openFile = fopen(path, "w");
+            if (openFile == NULL)
+            {
+              serial.printf("Can't open file\n");
+            }
+            else
+            {
+              commandIsOk = true;
+            }
+          }
+        }
+      }
+      else if (cp.isCommand("closeFile"))
+      {
+        commandIsOk = false;
+        if (openFile == NULL)
+        {
+          // Allow closing a file with success when none is open.
+          commandIsOk = true;
+        }
+        else
+        {
+          fclose(openFile);
+          openFile = NULL;
+          commandIsOk = true;
+        }
+      }
+      else if (cp.isCommand("writeFile"))
+      {
+        commandIsOk = false;
+        if (openFile == NULL)
+        {
+          serial.printf("No open file\n");
+        }
+        else
+        {
+          const uint8_t buffSize = 183;
+          uint8_t buff[buffSize];
+          uint32_t buffLength = 0;
+
+          if (!Utils::tryBase64Decode(cp.getTokenString(1), cp.getTokenLength(1),
+                                      buff, buffSize, &buffLength))
+          {
+            serial.printf("Base64 decode failed\n");
+          }
+          else 
+          {
+            fwrite(buff, 1, buffLength, openFile);
+            commandIsOk = true;
           }
         }
       }
@@ -227,6 +296,8 @@ void MasterBoard::tick(millisec timeDelta)
   waitStateTimeout -= timeDelta;
   if (waitStateTimeout < 0)
     waitStateTimeout = 0;
+
+  upTime += timeDelta;
 }
 
 // TODO State machine timeout for waiting states
