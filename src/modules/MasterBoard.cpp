@@ -75,7 +75,7 @@ void MasterBoard::mainLoop()
         {
           if (i > 0)
             serial.puts(", ");
-          serial.printf("addr:%i; hwId:%u; crc:%u",
+          serial.printf("addr:%i; hwId:%08X; crc:%08X",
                         enumeratedAddresses[i].address,
                         enumeratedAddresses[i].hardwareId,
                         enumeratedAddresses[i].crcReceived);
@@ -169,7 +169,7 @@ void MasterBoard::mainLoop()
         // Format:
         // openFile <fileName>
         commandIsOk = false;
-        if (cp.argsCountIs(1))
+        if (cp.argsCountIs(2))
         {
           if (openFile != NULL)
           {
@@ -178,7 +178,8 @@ void MasterBoard::mainLoop()
           else
           {
             auto path = cp.getTokenString(1);
-            openFile = fopen(path, "w");
+            auto mode = cp.getTokenString(2);
+            openFile = fopen(path, mode);
             if (openFile == NULL)
             {
               serial.printf("Can't open file\n");
@@ -228,6 +229,32 @@ void MasterBoard::mainLoop()
             fwrite(buff, 1, buffLength, openFile);
             commandIsOk = true;
           }
+        }
+      }
+      else if (cp.isCommand("crc32File"))
+      {
+        commandIsOk = false;
+        if (openFile == NULL)
+        {
+          serial.printf("No open file\n");
+        }
+        else
+        {
+          // Save the current position then seek to beginning to crc the whole file
+          auto prevSeekPos = ftell(openFile);
+          fseek(openFile, 0, SEEK_SET);
+
+          uint32_t crc32 = 0;
+          uint8_t fileByte;
+          while (fread(&fileByte, 1, 1, openFile) == 1) {
+            crc32 = Utils::crc32(fileByte, crc32);
+          }
+
+          // Restore previous seek position
+          fseek(openFile, prevSeekPos, SEEK_SET);
+
+          serial.printf("crc32: %08X\n", crc32);
+          commandIsOk = true;
         }
       }
 
