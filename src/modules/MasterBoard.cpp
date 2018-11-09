@@ -81,7 +81,7 @@ void MasterBoard::mainLoop()
                         enumeratedAddresses[i].crcReceived);
         }
         serial.printf("]\n");
-        serial.printf("Storyboard crc: %u\n", storyboard.calcCrc32(0));
+        serial.printf("Storyboard crc: %08X\n", storyboard.calcCrc32(0));
       }
       else if (cp.isCommand("toggleLed"))
       {
@@ -224,10 +224,16 @@ void MasterBoard::mainLoop()
           {
             serial.printf("Base64 decode failed\n");
           }
-          else 
+          else
           {
-            fwrite(buff, 1, buffLength, openFile);
-            commandIsOk = true;
+            if (fwrite(buff, 1, buffLength, openFile) != buffLength)
+            {
+              serial.printf("Write failed\n");
+            }
+            else
+            {
+              commandIsOk = true;
+            }
           }
         }
       }
@@ -246,7 +252,8 @@ void MasterBoard::mainLoop()
 
           uint32_t crc32 = 0;
           uint8_t fileByte;
-          while (fread(&fileByte, 1, 1, openFile) == 1) {
+          while (fread(&fileByte, 1, 1, openFile) == 1)
+          {
             crc32 = Utils::crc32(fileByte, crc32);
           }
 
@@ -388,12 +395,14 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
   }
   else
   {
+    /*
     serial.printf("pkt> #%i %c src:%i dst:%i ttl:%i\n",
                   p->header.data_size,
                   p->isProtocolPacket() ? 'p' : 'd',
                   p->header.src_address,
                   p->header.dst_address,
                   p->header.ttl);
+    */
   }
 
   if (p->isDataPacket(ringNetwork->getAddress(), 0, EMsgType::DebugPrint))
@@ -509,7 +518,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         }
       }
 
-      serial.printf("Sending %i timelines\n", timelinesCount);
+      // serial.printf("Sending %i timelines\n", timelinesCount);
 
       // Now we know
       p->data[1] = timelinesCount;
@@ -565,7 +574,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         auto entryCountToSend = Utils::min(20, t->getEntriesCount());
         p->data[3] = entryCountToSend;
 
-        serial.printf("Sending %i entries\n", entryCountToSend);
+        // serial.printf("Sending %i entries\n", entryCountToSend);
 
         for (int i = 0; i < entryCountToSend; i++)
         {

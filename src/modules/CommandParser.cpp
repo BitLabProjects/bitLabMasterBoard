@@ -69,7 +69,7 @@ bool CommandParser::isCommand(const char *cmd)
 {
   if (tokensCount < 1)
     return false;
-  return strncmp(cmd, &line[tokens[0].idxStart], tokens[0].length) == 0;
+  return strncmp(cmd, getTokenString(0), getTokenLength(0)) == 0;
 }
 
 bool CommandParser::tryParseUInt32(uint32_t tokenIdx, uint32_t &value, uint32_t base)
@@ -77,7 +77,7 @@ bool CommandParser::tryParseUInt32(uint32_t tokenIdx, uint32_t &value, uint32_t 
   if (tokenIdx >= tokensCount)
     return false;
 
-  return Utils::strTryParse(&line[tokens[tokenIdx].idxStart], tokens[tokenIdx].length, value, base);
+  return Utils::strTryParse(getTokenString(tokenIdx), getTokenLength(tokenIdx), value, base);
 }
 
 const char* CommandParser::getTokenString(uint32_t tokenIdx)
