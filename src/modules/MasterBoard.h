@@ -21,6 +21,7 @@ public:
 private:
   RingNetwork* ringNetwork;
   DigitalOut led;
+  uint32_t hardwareId;
 
   millisec upTime;
 

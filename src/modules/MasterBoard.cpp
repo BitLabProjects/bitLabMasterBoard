@@ -29,6 +29,8 @@ void MasterBoard::init(const bitLabCore *core)
   //serial.baud(1200);
   ringNetwork = (RingNetwork *)core->findModule("RingNetwork");
   ringNetwork->attachOnPacketReceived(callback(this, &MasterBoard::onPacketReceived));
+
+  hardwareId = core->getHardwareId();
 }
 
 void MasterBoard::mainLoop()
@@ -42,11 +44,6 @@ void MasterBoard::mainLoop()
       enumeratedAddressesCount = 0;
       goToState(EState::Enumerate_Start);
     }
-  }
-
-  if (ringNetwork->getSilenceDetected())
-  {
-    //serial.printf("Silence detected\n");
   }
 
   mainLoop_checkForWaitStateTimeout();
@@ -69,19 +66,19 @@ void MasterBoard::mainLoop()
       {
         serial.printf("Up time: %u sec\n", upTime / 1000);
         serial.printf("Free packets: %u\n", freePacketsCount);
-        serial.printf("Address: %i\n", ringNetwork->getAddress());
+        serial.printf("Net state: %s\n", ringNetwork->getIsConnected() ? "connected" : "disconnected");
         serial.printf("Enumerated devices: [");
-        for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
+        for (uint32_t i = 0; i <= enumeratedAddressesCount; i++)
         {
+          auto me = (i == 0);
           if (i > 0)
             serial.puts(", ");
           serial.printf("addr:%i; hwId:%08X; crc:%08X",
-                        enumeratedAddresses[i].address,
-                        enumeratedAddresses[i].hardwareId,
-                        enumeratedAddresses[i].crcReceived);
+                        me ? ringNetwork->getAddress() : enumeratedAddresses[i-1].address,
+                        me ? hardwareId : enumeratedAddresses[i-1].hardwareId,
+                        me ? storyboard.calcCrc32(0) : enumeratedAddresses[i-1].crcReceived);
         }
         serial.printf("]\n");
-        serial.printf("Storyboard crc: %08X\n", storyboard.calcCrc32(0));
       }
       else if (cp.isCommand("toggleLed"))
       {
