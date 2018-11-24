@@ -6,6 +6,8 @@
 
 #include "..\bitLabCore\src\storyboard\Storyboard.h"
 
+//#include "..\bitLabCore\src\display\SSD1306.h"
+
 class MasterBoard : public CoreModule
 {
 public:
@@ -22,8 +24,15 @@ private:
   RingNetwork* ringNetwork;
   DigitalOut led;
   uint32_t hardwareId;
+  const char* clockSourceDescr;
 
   millisec upTime;
+  millisec eachSecondTimeout;
+  bool secondElapsed;
+
+  millisec storyboardTime;
+  millisec storyboardTimeAtLastGetState;
+  bool isPlaying;
 
   // Serial protocol state
   FILE *openFile;
@@ -36,8 +45,8 @@ private:
     ToggleLed_Start,
     SendStoryboard_Start,
     SendStoryboard_SendTimelines,
-    CheckStoryboard_Start,
-    CheckStoryboard_WaitCrc,
+    ReadState_Start,
+    ReadState_WaitCrc,
     Play_Start,
     Stop_Start,
     SetOutput_Start,
@@ -59,6 +68,7 @@ private:
     uint8_t address;
     uint32_t hardwareId;
     uint32_t crcReceived;
+    millisec storyboardTime;
   };
 
   EnumeratedDeviceInfo enumeratedAddresses[10];

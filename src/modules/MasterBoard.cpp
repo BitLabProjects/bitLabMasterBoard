@@ -8,6 +8,10 @@ Serial serial(USBTX, USBRX);
 
 MasterBoard::MasterBoard() : led(LED2),
                              upTime(0),
+                             eachSecondTimeout(1000),
+                             secondElapsed(false),
+                             storyboardTime(0),
+                             isPlaying(false),
                              openFile(NULL),
                              state(EState::WaitAddressAssigned),
                              state_currDeviceIdx(0),
@@ -31,6 +35,7 @@ void MasterBoard::init(const bitLabCore *core)
   ringNetwork->attachOnPacketReceived(callback(this, &MasterBoard::onPacketReceived));
 
   hardwareId = core->getHardwareId();
+  clockSourceDescr = core->getClockSourceDescr();
 }
 
 void MasterBoard::mainLoop()
@@ -44,6 +49,11 @@ void MasterBoard::mainLoop()
       enumeratedAddressesCount = 0;
       goToState(EState::Enumerate_Start);
     }
+  }
+
+  if (secondElapsed)
+  {
+    secondElapsed = false;
   }
 
   mainLoop_checkForWaitStateTimeout();
@@ -73,12 +83,17 @@ void MasterBoard::mainLoop()
           auto me = (i == 0);
           if (i > 0)
             serial.puts(", ");
-          serial.printf("addr:%i; hwId:%08X; crc:%08X",
-                        me ? ringNetwork->getAddress() : enumeratedAddresses[i-1].address,
-                        me ? hardwareId : enumeratedAddresses[i-1].hardwareId,
-                        me ? storyboard.calcCrc32(0) : enumeratedAddresses[i-1].crcReceived);
+          serial.printf("addr:%i; hwId:%08X; crc:%08X; time:%i",
+                        me ? ringNetwork->getAddress() : enumeratedAddresses[i - 1].address,
+                        me ? hardwareId : enumeratedAddresses[i - 1].hardwareId,
+                        me ? storyboard.calcCrc32(0) : enumeratedAddresses[i - 1].crcReceived,
+                        me ? storyboardTimeAtLastGetState : enumeratedAddresses[i - 1].storyboardTime);
         }
         serial.printf("]\n");
+      }
+      else if (cp.isCommand("clock"))
+      {
+        serial.printf("Clock type: %s\n", clockSourceDescr);
       }
       else if (cp.isCommand("toggleLed"))
       {
@@ -86,7 +101,7 @@ void MasterBoard::mainLoop()
       }
       else if (cp.isCommand("load"))
       {
-        if (state == EState::Idle)
+        if (state == EState::Idle || state == EState::WaitAddressAssigned)
         {
           FILE *file = fopen("/sd/storyboard.json", "r");
           if (file == NULL)
@@ -125,15 +140,23 @@ void MasterBoard::mainLoop()
       }
       else if (cp.isCommand("check"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::CheckStoryboard_Start);
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::ReadState_Start);
+        if (commandIsOk)
+        {
+          storyboardTimeAtLastGetState = storyboardTime;
+      }
       }
       else if (cp.isCommand("play"))
       {
         commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Play_Start);
+        if (commandIsOk)
+          isPlaying = true;
       }
       else if (cp.isCommand("stop"))
       {
         commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Stop_Start);
+        if (commandIsOk)
+          isPlaying = false;
       }
       else if (cp.isCommand("setOutput"))
       {
@@ -264,11 +287,11 @@ void MasterBoard::mainLoop()
 
       if (commandIsOk)
       {
-        serial.printf("Ok\n\n");
+        serial.printf("Ok\n");
       }
       else
       {
-        serial.printf("Error\n\n");
+        serial.printf("Error\n");
       }
     }
   }
@@ -329,6 +352,22 @@ void MasterBoard::tick(millisec timeDelta)
     waitStateTimeout = 0;
 
   upTime += timeDelta;
+
+  eachSecondTimeout -= timeDelta;
+  if (eachSecondTimeout <= 0)
+  {
+    secondElapsed = true;
+    eachSecondTimeout = 1000;
+  }
+
+  if (isPlaying)
+  {
+    storyboardTime += timeDelta;
+    if (storyboardTime >= storyboard.getDuration())
+    {
+      storyboardTime -= storyboard.getDuration();
+    }
+  }
 }
 
 // TODO State machine timeout for waiting states
@@ -358,12 +397,12 @@ Purpose: upload the storyboard to the enumerated devices, sending to each device
    If this device was the last device, the upload is ended.
    Otherwise it goes into SendStoryboard_Start state for the next device.
 
---- Storyboard check procedure ---
-Purpose: check the storyboard uploaded to the enumerated devices, asking each device its crc
-1. CheckStoryboard_Start sends a GetStoryboardChecksum packet to the first device and
-   goes into CheckStoryboard_WaitCrc state
-2. CheckStoryboard_WaitCrc waits for a TellStoryboardChecksum packet from the device
-   It checks the crc received then goes into CheckStoryboard_Start state for the next device
+--- ReadState procedure ---
+Purpose: Retrieve the state of enumerated device, to check the uploaded storyboard crc and time sync.
+1. ReadState_Start sends a GetState packet to the first device and
+   goes into ReadState_WaitCrc state
+2. ReadState_WaitCrc waits for a TellState packet from the device
+   It checks the crc received then goes into ReadState_Start state for the next device
 */
 
 enum EMsgType
@@ -371,8 +410,8 @@ enum EMsgType
   SetLed = 1,
   CreateStoryboard = 2,
   SetTimelineEntries = 3,
-  GetStoryboardChecksum = 4,
-  TellStoryboardChecksum = 5,
+  GetState = 4,
+  TellState = 5,
   SetStoryboardTime = 6,
   Play = 7,
   Pause = 8,
@@ -591,7 +630,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
     }
     break;
 
-  case EState::CheckStoryboard_Start:
+  case EState::ReadState_Start:
     if (isFree)
     {
       p->header.data_size = 1;
@@ -599,16 +638,17 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.src_address = ringNetwork->getAddress();
       p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
-      p->data[0] = EMsgType::GetStoryboardChecksum;
+      p->data[0] = EMsgType::GetState;
       *pTxAction = PTxAction::Send;
-      goToState(EState::CheckStoryboard_WaitCrc);
+      goToState(EState::ReadState_WaitCrc);
     }
     break;
 
-  case EState::CheckStoryboard_WaitCrc:
-    if (p->isDataPacket(ringNetwork->getAddress(), 1 + 4, EMsgType::TellStoryboardChecksum))
+  case EState::ReadState_WaitCrc:
+    if (p->isDataPacket(ringNetwork->getAddress(), 1 + 4 + 4, EMsgType::TellState))
     {
       enumeratedAddresses[state_currDeviceIdx].crcReceived = p->getDataUInt32(1);
+      enumeratedAddresses[state_currDeviceIdx].storyboardTime = p->getDataInt32(1 + 4);
 
       if (state_currDeviceIdx == enumeratedAddressesCount - 1)
       {
@@ -617,7 +657,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       else
       {
         state_currDeviceIdx += 1;
-        goToState(EState::CheckStoryboard_Start);
+        goToState(EState::ReadState_Start);
       }
     }
     break;
