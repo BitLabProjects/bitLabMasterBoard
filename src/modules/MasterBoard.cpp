@@ -668,7 +668,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.data_size = 1;
       p->header.control = 1;
       p->header.src_address = ringNetwork->getAddress();
-      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
+      p->header.dst_address = RingNetworkProtocol::broadcast_address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::Play;
       *pTxAction = PTxAction::Send;
@@ -682,7 +682,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.data_size = 1;
       p->header.control = 1;
       p->header.src_address = ringNetwork->getAddress();
-      p->header.dst_address = enumeratedAddresses[state_currDeviceIdx].address;
+      p->header.dst_address = RingNetworkProtocol::broadcast_address;
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::Stop;
       *pTxAction = PTxAction::Send;
