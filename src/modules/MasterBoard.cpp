@@ -7,6 +7,8 @@
 Serial serial(USBTX, USBRX);
 
 MasterBoard::MasterBoard() : led(LED2),
+                             inPlay(PB_13),
+                             inStop(PB_14),
                              upTime(0),
                              eachSecondTimeout(1000),
                              secondElapsed(false),
@@ -58,6 +60,23 @@ void MasterBoard::mainLoop()
 
   mainLoop_checkForWaitStateTimeout();
 
+  mainLoop_serialProtocol();
+}
+
+void MasterBoard::mainLoop_checkForWaitStateTimeout()
+{
+  if (waitStateTimeoutEnabled)
+  {
+    if (waitStateTimeout == 0)
+    {
+      goToStateIdle();
+      serial.puts("Timeout\n");
+    }
+  }
+}
+
+void MasterBoard::mainLoop_serialProtocol()
+{
   if (serial.readable())
   {
     CommandParser cp;
@@ -297,18 +316,6 @@ void MasterBoard::mainLoop()
   }
 }
 
-void MasterBoard::mainLoop_checkForWaitStateTimeout()
-{
-  if (waitStateTimeoutEnabled)
-  {
-    if (waitStateTimeout == 0)
-    {
-      goToStateIdle();
-      serial.puts("Timeout\n");
-    }
-  }
-}
-
 int32_t MasterBoard::findDeviceByHardwareId(uint32_t hardwareId)
 {
   for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
@@ -412,7 +419,7 @@ enum EMsgType
   SetTimelineEntries = 3,
   GetState = 4,
   TellState = 5,
-  SetStoryboardTime = 6,
+  SyncStoryboardTime = 6,
   Play = 7,
   Pause = 8,
   Stop = 9,

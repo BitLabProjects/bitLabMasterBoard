@@ -23,6 +23,8 @@ public:
 private:
   RingNetwork* ringNetwork;
   DigitalOut led;
+  DigitalIn inPlay;
+  DigitalIn inStop;
   uint32_t hardwareId;
   const char* clockSourceDescr;
 
@@ -81,6 +83,7 @@ private:
   void onPacketReceived(RingPacket*, PTxAction*);
 
   void mainLoop_checkForWaitStateTimeout();
+  void mainLoop_serialProtocol();
   millisec waitStateTimeout;
   bool waitStateTimeoutEnabled;
 };
