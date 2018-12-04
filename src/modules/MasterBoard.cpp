@@ -9,6 +9,7 @@ Serial serial(USBTX, USBRX);
 MasterBoard::MasterBoard() : led(LED2),
                              inPlay(PB_13),
                              inStop(PB_14),
+                             inputDebounceTimeout(0),
                              upTime(0),
                              eachSecondTimeout(1000),
                              secondElapsed(false),
@@ -16,6 +17,7 @@ MasterBoard::MasterBoard() : led(LED2),
                              isPlaying(false),
                              openFile(NULL),
                              state(EState::WaitAddressAssigned),
+                             protocolState(EProtocolState::PS_Idle),
                              state_currDeviceIdx(0),
                              state_nextTimelineIdxMaybeToSend(0),
                              stateArg_OutputId(0),
@@ -42,15 +44,22 @@ void MasterBoard::init(const bitLabCore *core)
 
 void MasterBoard::mainLoop()
 {
-  if (state == EState::WaitAddressAssigned)
-  {
-    if (ringNetwork->isAddressAssigned())
-    {
-      serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
-      serial.printf("Starting enumeration...\n");
-      enumeratedAddressesCount = 0;
-      goToState(EState::Enumerate_Start);
-    }
+  switch (state) {
+    case EState::WaitAddressAssigned:
+      if (ringNetwork->isAddressAssigned())
+      {
+        serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
+        serial.printf("Starting enumeration...\n");
+        enumeratedAddressesCount = 0;
+        goToState(EProtocolState::Enumerate_Start);
+      }
+      break;
+
+    case EState::Idle:
+      break;
+
+    case EState::BusyWithProtocol:
+      break;
   }
 
   if (secondElapsed)
@@ -61,6 +70,8 @@ void MasterBoard::mainLoop()
   mainLoop_checkForWaitStateTimeout();
 
   mainLoop_serialProtocol();
+
+  mainLoop_keyboard();
 }
 
 void MasterBoard::mainLoop_checkForWaitStateTimeout()
@@ -116,11 +127,11 @@ void MasterBoard::mainLoop_serialProtocol()
       }
       else if (cp.isCommand("toggleLed"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::ToggleLed_Start);
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::ToggleLed_Start);
       }
       else if (cp.isCommand("load"))
       {
-        if (state == EState::Idle || state == EState::WaitAddressAssigned)
+        if (!isStateBusy())
         {
           FILE *file = fopen("/sd/storyboard.json", "r");
           if (file == NULL)
@@ -155,25 +166,25 @@ void MasterBoard::mainLoop_serialProtocol()
       }
       else if (cp.isCommand("upload"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::SendStoryboard_Start);
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::SendStoryboard_Start);
       }
       else if (cp.isCommand("check"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::ReadState_Start);
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::ReadState_Start);
         if (commandIsOk)
         {
           storyboardTimeAtLastGetState = storyboardTime;
-      }
+        }
       }
       else if (cp.isCommand("play"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Play_Start);
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::Play_Start);
         if (commandIsOk)
           isPlaying = true;
       }
       else if (cp.isCommand("stop"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::Stop_Start);
+        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::Stop_Start);
         if (commandIsOk)
           isPlaying = false;
       }
@@ -194,7 +205,7 @@ void MasterBoard::mainLoop_serialProtocol()
             {
               stateArg_OutputId = outputId;
               stateArg_Value = value;
-              commandIsOk = tryGoToStateIfIdleAndHasDevices(EState::SetOutput_Start, deviceIdx);
+              commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::SetOutput_Start, deviceIdx);
             }
             else
             {
@@ -316,6 +327,26 @@ void MasterBoard::mainLoop_serialProtocol()
   }
 }
 
+void MasterBoard::mainLoop_keyboard()
+{
+  // Check for debounce
+  if (inputDebounceTimeout > 0)
+    return;
+
+  if (inPlay.read())
+  {
+    // TODO load();
+
+    inputDebounceTimeout = InputDebounceTimeoutValue;
+    return;
+  }
+  if (inStop.read())
+  {
+    inputDebounceTimeout = InputDebounceTimeoutValue;
+    return;
+  }
+}
+
 int32_t MasterBoard::findDeviceByHardwareId(uint32_t hardwareId)
 {
   for (uint32_t i = 0; i < enumeratedAddressesCount; i++)
@@ -326,19 +357,21 @@ int32_t MasterBoard::findDeviceByHardwareId(uint32_t hardwareId)
   return -1;
 }
 
-void MasterBoard::goToState(EState newState)
+void MasterBoard::goToState(EProtocolState newState)
 {
-  state = newState;
+  state = EState::BusyWithProtocol;
+  protocolState = newState;
   waitStateTimeout = 1000;
   waitStateTimeoutEnabled = true;
 }
 void MasterBoard::goToStateIdle()
 {
-  state = EState::Idle;
+  protocolState = EProtocolState::PS_Idle;
   waitStateTimeoutEnabled = false;
   waitStateTimeout = 0;
+  state = EState::Idle;
 }
-bool MasterBoard::tryGoToStateIfIdleAndHasDevices(EState newState, uint32_t currDeviceIdx)
+bool MasterBoard::tryGoToStateIfIdleAndHasDevices(EProtocolState newState, uint32_t currDeviceIdx)
 {
   if (isIdleAndHasDevices())
   {
@@ -357,6 +390,10 @@ void MasterBoard::tick(millisec timeDelta)
   waitStateTimeout -= timeDelta;
   if (waitStateTimeout < 0)
     waitStateTimeout = 0;
+
+  inputDebounceTimeout -= timeDelta;
+  if (inputDebounceTimeout < 0)
+    inputDebounceTimeout = 0;
 
   upTime += timeDelta;
 
@@ -458,14 +495,12 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
 
   // 1.Send a WhoAreYou packet with ttl from 1 to 11 and wait for the response Hello packet
   // 1. Send
-  switch (state)
+  switch (protocolState)
   {
-  case EState::Idle:
-    break;
-  case EState::WaitAddressAssigned:
+  case EProtocolState::PS_Idle:
     break;
 
-  case EState::Enumerate_Start:
+  case EProtocolState::Enumerate_Start:
     if (isFree)
     {
       led = !led;
@@ -476,11 +511,11 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = enumeratedAddressesCount + 1;
       p->data[0] = RingNetworkProtocol::protocol_msgid_whoareyou;
       *pTxAction = PTxAction::Send;
-      goToState(EState::Enumerate_WaitHello);
+      goToState(EProtocolState::Enumerate_WaitHello);
       return;
     }
     break;
-  case EState::Enumerate_WaitHello:
+  case EProtocolState::Enumerate_WaitHello:
     if (p->isProtocolPacket() &&
         p->isForDstAddress(ringNetwork->getAddress()) &&
         p->header.data_size >= (1 + 4) &&
@@ -506,13 +541,13 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         }
         else
         {
-          goToState(EState::Enumerate_Start);
+          goToState(EProtocolState::Enumerate_Start);
         }
       }
       return;
     }
     break;
-  case EState::ToggleLed_Start:
+  case EProtocolState::ToggleLed_Start:
     if (isFree)
     {
       bool ledState = !led;
@@ -530,7 +565,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
     }
     break;
 
-  case EState::SendStoryboard_Start:
+  case EProtocolState::SendStoryboard_Start:
     if (isFree)
     {
       p->header.control = 1;
@@ -569,11 +604,11 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
 
       *pTxAction = PTxAction::Send;
       state_nextTimelineIdxMaybeToSend = 0;
-      goToState(EState::SendStoryboard_SendTimelines);
+      goToState(EProtocolState::SendStoryboard_SendTimelines);
     }
     break;
 
-  case EState::SendStoryboard_SendTimelines:
+  case EProtocolState::SendStoryboard_SendTimelines:
     if (isFree)
     {
       // search for the next timeline to send
@@ -601,7 +636,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         else
         {
           state_currDeviceIdx += 1;
-          goToState(EState::SendStoryboard_Start);
+          goToState(EProtocolState::SendStoryboard_Start);
         }
       }
       else
@@ -631,13 +666,13 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
 
         *pTxAction = PTxAction::Send;
 
-        // Stay in EState::SendStoryboard_SendTimelines state
+        // Stay in EProtocolState::SendStoryboard_SendTimelines state
         state_nextTimelineIdxMaybeToSend = idxTimelineToSend + 1;
       }
     }
     break;
 
-  case EState::ReadState_Start:
+  case EProtocolState::ReadState_Start:
     if (isFree)
     {
       p->header.data_size = 1;
@@ -647,11 +682,11 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::GetState;
       *pTxAction = PTxAction::Send;
-      goToState(EState::ReadState_WaitCrc);
+      goToState(EProtocolState::ReadState_WaitCrc);
     }
     break;
 
-  case EState::ReadState_WaitCrc:
+  case EProtocolState::ReadState_WaitCrc:
     if (p->isDataPacket(ringNetwork->getAddress(), 1 + 4 + 4, EMsgType::TellState))
     {
       enumeratedAddresses[state_currDeviceIdx].crcReceived = p->getDataUInt32(1);
@@ -664,12 +699,12 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       else
       {
         state_currDeviceIdx += 1;
-        goToState(EState::ReadState_Start);
+        goToState(EProtocolState::ReadState_Start);
       }
     }
     break;
 
-  case EState::Play_Start:
+  case EProtocolState::Play_Start:
     if (isFree)
     {
       p->header.data_size = 1;
@@ -683,7 +718,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
     }
     break;
 
-  case EState::Stop_Start:
+  case EProtocolState::Stop_Start:
     if (isFree)
     {
       p->header.data_size = 1;
@@ -696,7 +731,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       goToStateIdle();
     }
     break;
-  case EState::SetOutput_Start:
+  case EProtocolState::SetOutput_Start:
     if (isFree)
     {
       p->header.data_size = 1 + 1 + 4;

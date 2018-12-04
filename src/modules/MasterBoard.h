@@ -25,6 +25,8 @@ private:
   DigitalOut led;
   DigitalIn inPlay;
   DigitalIn inStop;
+  const millisec InputDebounceTimeoutValue = 500;
+  millisec inputDebounceTimeout;
   uint32_t hardwareId;
   const char* clockSourceDescr;
 
@@ -36,12 +38,19 @@ private:
   millisec storyboardTimeAtLastGetState;
   bool isPlaying;
 
-  // Serial protocol state
+  // Serial protocol protocolState
   FILE *openFile;
 
   enum EState {
     WaitAddressAssigned,
     Idle,
+    BusyWithProtocol,
+  };
+  EState state;
+  inline bool isStateBusy() { return state == EState::BusyWithProtocol; }
+
+  enum EProtocolState {
+    PS_Idle,
     Enumerate_Start,
     Enumerate_WaitHello,
     ToggleLed_Start,
@@ -53,17 +62,17 @@ private:
     Stop_Start,
     SetOutput_Start,
   };
-  EState state;
+  EProtocolState protocolState;
 
-  // data variables for the state machine
+  // data variables for the protocolState machine
   uint32_t state_currDeviceIdx;
   uint8_t state_nextTimelineIdxMaybeToSend;
   uint8_t stateArg_OutputId; // setOutput
   uint32_t stateArg_Value; // setOutput
 
-  void goToState(EState newState);
+  void goToState(EProtocolState newState);
   void goToStateIdle();
-  bool tryGoToStateIfIdleAndHasDevices(EState newState, uint32_t currDeviceIdx = 0);
+  bool tryGoToStateIfIdleAndHasDevices(EProtocolState newState, uint32_t currDeviceIdx = 0);
   uint32_t freePacketsCount;
 
   struct EnumeratedDeviceInfo {
@@ -84,6 +93,7 @@ private:
 
   void mainLoop_checkForWaitStateTimeout();
   void mainLoop_serialProtocol();
+  void mainLoop_keyboard();
   millisec waitStateTimeout;
   bool waitStateTimeoutEnabled;
 };
