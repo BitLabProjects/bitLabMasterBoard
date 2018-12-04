@@ -6,7 +6,7 @@
 
 #include "..\bitLabCore\src\storyboard\Storyboard.h"
 
-//#include "..\bitLabCore\src\display\SSD1306.h"
+#include "..\bitLabCore\src\display\SSD1306.h"
 
 class MasterBoard : public CoreModule
 {
@@ -22,13 +22,26 @@ public:
 
 private:
   RingNetwork* ringNetwork;
+  uint32_t hardwareId;
+  bool lastIsConnected;
+  
   DigitalOut led;
   DigitalIn inPlay;
   DigitalIn inStop;
-  const millisec InputDebounceTimeoutValue = 500;
+  const millisec InputDebounceTimeoutValue = 250;
   millisec inputDebounceTimeout;
-  uint32_t hardwareId;
+  enum EDisplayState {
+    Home,
+    DeviceList,
+  };
+  EDisplayState displayState;
+  bool isDisplayDirty;
+  void printDisplay();
+  
   const char* clockSourceDescr;
+
+  I2C i2c;
+  SSD1306OverI2C oled;
 
   millisec upTime;
   millisec eachSecondTimeout;
@@ -43,11 +56,13 @@ private:
 
   enum EState {
     WaitAddressAssigned,
+    Enumerating,
     Idle,
     BusyWithProtocol,
   };
   EState state;
-  inline bool isStateBusy() { return state == EState::BusyWithProtocol; }
+  inline bool isStateBusy() { return state == EState::BusyWithProtocol ||
+                                     state == EState::Enumerating; }
 
   enum EProtocolState {
     PS_Idle,
@@ -70,8 +85,10 @@ private:
   uint8_t stateArg_OutputId; // setOutput
   uint32_t stateArg_Value; // setOutput
 
-  void goToState(EProtocolState newState);
+  void goToProtocolState(EProtocolState newProtocolState);
+  void goToState(EState newState, EProtocolState newProtocolState);
   void goToStateIdle();
+  void goToStateIdle2();
   bool tryGoToStateIfIdleAndHasDevices(EProtocolState newState, uint32_t currDeviceIdx = 0);
   uint32_t freePacketsCount;
 

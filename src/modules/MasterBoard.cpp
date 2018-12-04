@@ -7,9 +7,14 @@
 Serial serial(USBTX, USBRX);
 
 MasterBoard::MasterBoard() : led(LED2),
+                             lastIsConnected(false),
                              inPlay(PB_13),
                              inStop(PB_14),
                              inputDebounceTimeout(0),
+                             isDisplayDirty(false),
+                             displayState(EDisplayState::Home),
+                             i2c(D5, D7),
+                             oled(i2c, NC),
                              upTime(0),
                              eachSecondTimeout(1000),
                              secondElapsed(false),
@@ -34,16 +39,31 @@ void MasterBoard::init(const bitLabCore *core)
 {
   serial.baud(115200);
   serial.puts("Hello!\n");
+
+  oled.clearDisplay();
+  oled.printf("Initializing...");
+  oled.display();
+
   //serial.baud(1200);
   ringNetwork = (RingNetwork *)core->findModule("RingNetwork");
   ringNetwork->attachOnPacketReceived(callback(this, &MasterBoard::onPacketReceived));
 
   hardwareId = core->getHardwareId();
   clockSourceDescr = core->getClockSourceDescr();
+
+  oled.printf("[ok]\r\n");
+  oled.printf("hwId=%08X\r\n", hardwareId);
+  oled.display();
 }
 
 void MasterBoard::mainLoop()
 {
+  bool newIsConnected = ringNetwork->getIsConnected();
+  if (lastIsConnected != newIsConnected) {
+    lastIsConnected = newIsConnected;
+    isDisplayDirty = true;
+  }
+
   switch (state) {
     case EState::WaitAddressAssigned:
       if (ringNetwork->isAddressAssigned())
@@ -51,7 +71,16 @@ void MasterBoard::mainLoop()
         serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
         serial.printf("Starting enumeration...\n");
         enumeratedAddressesCount = 0;
-        goToState(EProtocolState::Enumerate_Start);
+        goToState(EState::Enumerating, EProtocolState::Enumerate_Start);
+      }
+      break;
+
+    case EState::Enumerating:
+      if (protocolState == EProtocolState::PS_Idle) {
+        serial.printf("Enumeration completed, %i found\n", enumeratedAddressesCount);
+        // Enumeration is complete 
+        isDisplayDirty = true;
+        state = EState::Idle;
       }
       break;
 
@@ -72,6 +101,8 @@ void MasterBoard::mainLoop()
   mainLoop_serialProtocol();
 
   mainLoop_keyboard();
+
+  printDisplay();
 }
 
 void MasterBoard::mainLoop_checkForWaitStateTimeout()
@@ -335,6 +366,8 @@ void MasterBoard::mainLoop_keyboard()
 
   if (inPlay.read())
   {
+    serial.printf("play!\n");
+    isDisplayDirty = true;
     // TODO load();
 
     inputDebounceTimeout = InputDebounceTimeoutValue;
@@ -342,8 +375,32 @@ void MasterBoard::mainLoop_keyboard()
   }
   if (inStop.read())
   {
+    serial.printf("stop!\n");
+
     inputDebounceTimeout = InputDebounceTimeoutValue;
     return;
+  }
+}
+
+void MasterBoard::printDisplay() {
+  if (!isDisplayDirty)
+    return;
+
+  isDisplayDirty = false;
+
+  switch (displayState) {
+    case EDisplayState::Home:
+      oled.clearDisplay();
+      oled.setTextCursor(0, 0);
+      oled.printf("Net: %s\n", ringNetwork->getIsConnected() ? "connected" : "disconnected");
+      oled.printf("Address: %i\n", ringNetwork->getAddress());
+      oled.printf("Devices: %i\n", enumeratedAddressesCount);
+      oled.printf("Play status: %s\n", isPlaying ? "playing" : "stopped");
+      oled.display();
+    break;
+
+    case EDisplayState::DeviceList:
+    break;
   }
 }
 
@@ -357,10 +414,14 @@ int32_t MasterBoard::findDeviceByHardwareId(uint32_t hardwareId)
   return -1;
 }
 
-void MasterBoard::goToState(EProtocolState newState)
+void MasterBoard::goToState(EState newState, EProtocolState newProtocolState)
 {
-  state = EState::BusyWithProtocol;
-  protocolState = newState;
+  state = newState;
+  goToProtocolState(newProtocolState);
+}
+void MasterBoard::goToProtocolState(EProtocolState newProtocolState)
+{
+  protocolState = newProtocolState;
   waitStateTimeout = 1000;
   waitStateTimeoutEnabled = true;
 }
@@ -371,12 +432,18 @@ void MasterBoard::goToStateIdle()
   waitStateTimeout = 0;
   state = EState::Idle;
 }
+void MasterBoard::goToStateIdle2()
+{
+  protocolState = EProtocolState::PS_Idle;
+  waitStateTimeoutEnabled = false;
+  waitStateTimeout = 0;
+}
 bool MasterBoard::tryGoToStateIfIdleAndHasDevices(EProtocolState newState, uint32_t currDeviceIdx)
 {
   if (isIdleAndHasDevices())
   {
     state_currDeviceIdx = currDeviceIdx;
-    goToState(newState);
+    goToState(EState::BusyWithProtocol, newState);
     return true;
   }
   else
@@ -511,7 +578,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = enumeratedAddressesCount + 1;
       p->data[0] = RingNetworkProtocol::protocol_msgid_whoareyou;
       *pTxAction = PTxAction::Send;
-      goToState(EProtocolState::Enumerate_WaitHello);
+      goToProtocolState(EProtocolState::Enumerate_WaitHello);
       return;
     }
     break;
@@ -527,7 +594,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       bool isMyself = (src_address == ringNetwork->getAddress());
       if (isMyself)
       {
-        goToStateIdle();
+        goToStateIdle2();
       }
       else
       {
@@ -537,11 +604,11 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         enumeratedAddressesCount += 1;
         if (enumeratedAddressesCount == 10)
         {
-          goToStateIdle();
+          goToStateIdle2();
         }
         else
         {
-          goToState(EProtocolState::Enumerate_Start);
+          goToProtocolState(EProtocolState::Enumerate_Start);
         }
       }
       return;
@@ -604,7 +671,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
 
       *pTxAction = PTxAction::Send;
       state_nextTimelineIdxMaybeToSend = 0;
-      goToState(EProtocolState::SendStoryboard_SendTimelines);
+      goToProtocolState(EProtocolState::SendStoryboard_SendTimelines);
     }
     break;
 
@@ -636,7 +703,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
         else
         {
           state_currDeviceIdx += 1;
-          goToState(EProtocolState::SendStoryboard_Start);
+          goToProtocolState(EProtocolState::SendStoryboard_Start);
         }
       }
       else
@@ -682,7 +749,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       p->header.ttl = RingNetworkProtocol::ttl_max;
       p->data[0] = EMsgType::GetState;
       *pTxAction = PTxAction::Send;
-      goToState(EProtocolState::ReadState_WaitCrc);
+      goToProtocolState(EProtocolState::ReadState_WaitCrc);
     }
     break;
 
@@ -699,7 +766,7 @@ void MasterBoard::onPacketReceived(RingPacket *p, PTxAction *pTxAction)
       else
       {
         state_currDeviceIdx += 1;
-        goToState(EProtocolState::ReadState_Start);
+        goToProtocolState(EProtocolState::ReadState_Start);
       }
     }
     break;
