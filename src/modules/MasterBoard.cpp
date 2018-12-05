@@ -8,11 +8,15 @@ Serial serial(USBTX, USBRX);
 
 MasterBoard::MasterBoard() : led(LED2),
                              lastIsConnected(false),
+                             connectionLostCount(0),
                              inPlay(PB_13),
                              inStop(PB_14),
                              inputDebounceTimeout(0),
+                             pressedKey(EInputKey::Key_None),
+                             pressedKeyTime(0),
                              isDisplayDirty(false),
                              displayState(EDisplayState::Home),
+                             selectedCommand(ECommand::Load),
                              i2c(D5, D7),
                              oled(i2c, NC),
                              upTime(0),
@@ -59,41 +63,53 @@ void MasterBoard::init(const bitLabCore *core)
 void MasterBoard::mainLoop()
 {
   bool newIsConnected = ringNetwork->getIsConnected();
-  if (lastIsConnected != newIsConnected) {
+  if (lastIsConnected != newIsConnected)
+  {
+    if (!newIsConnected)
+    {
+      connectionLostCount += 1;
+    }
     lastIsConnected = newIsConnected;
     isDisplayDirty = true;
   }
 
-  switch (state) {
-    case EState::WaitAddressAssigned:
-      if (ringNetwork->isAddressAssigned())
-      {
-        serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
-        serial.printf("Starting enumeration...\n");
-        enumeratedAddressesCount = 0;
-        goToState(EState::Enumerating, EProtocolState::Enumerate_Start);
-      }
-      break;
+  switch (state)
+  {
+  case EState::WaitAddressAssigned:
+    if (ringNetwork->isAddressAssigned())
+    {
+      serial.printf("Address assigned: %i\n", ringNetwork->getAddress());
+      serial.printf("Starting enumeration...\n");
+      enumeratedAddressesCount = 0;
+      goToState(EState::Enumerating, EProtocolState::Enumerate_Start);
+    }
+    break;
 
-    case EState::Enumerating:
-      if (protocolState == EProtocolState::PS_Idle) {
-        serial.printf("Enumeration completed, %i found\n", enumeratedAddressesCount);
-        // Enumeration is complete 
-        isDisplayDirty = true;
-        state = EState::Idle;
-      }
-      break;
+  case EState::Enumerating:
+    if (protocolState == EProtocolState::PS_Idle)
+    {
+      serial.printf("Enumeration completed, %i found\n", enumeratedAddressesCount);
+      // Enumeration is complete
+      isDisplayDirty = true;
+      state = EState::Idle;
+    }
+    break;
 
-    case EState::Idle:
-      break;
+  case EState::Idle:
+    break;
 
-    case EState::BusyWithProtocol:
-      break;
+  case EState::BusyWithProtocol:
+    break;
   }
 
   if (secondElapsed)
   {
     secondElapsed = false;
+    // Update the display with live stats once a second (packet count)
+    if (displayState == EDisplayState::Stats)
+    {
+      isDisplayDirty = true;
+    }
   }
 
   mainLoop_checkForWaitStateTimeout();
@@ -162,42 +178,11 @@ void MasterBoard::mainLoop_serialProtocol()
       }
       else if (cp.isCommand("load"))
       {
-        if (!isStateBusy())
-        {
-          FILE *file = fopen("/sd/storyboard.json", "r");
-          if (file == NULL)
-          {
-            serial.printf("File not available\n");
-            commandIsOk = false;
-          }
-          else
-          {
-            fseek(file, 0, SEEK_END);
-            long fileSize = ftell(file);
-            fseek(file, 0, SEEK_SET);
-            serial.printf("Reading %i bytes\n", fileSize);
-
-            char *buff = new char[fileSize];
-            fread(buff, fileSize, 1, file);
-            fclose(file);
-
-            serial.printf("Parsing storyboard\n");
-            StoryboardLoader loader(&storyboard, buff);
-            loader.load();
-
-            serial.printf("Loaded %i timelines, duration: %i ms\n",
-                          storyboard.getTimelinesCount(),
-                          storyboard.getDuration());
-          }
-        }
-        else
-        {
-          commandIsOk = false;
-        }
+        commandIsOk = command_Load();
       }
       else if (cp.isCommand("upload"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::SendStoryboard_Start);
+        commandIsOk = command_Upload();
       }
       else if (cp.isCommand("check"))
       {
@@ -209,15 +194,11 @@ void MasterBoard::mainLoop_serialProtocol()
       }
       else if (cp.isCommand("play"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::Play_Start);
-        if (commandIsOk)
-          isPlaying = true;
+        commandIsOk = command_Play();
       }
       else if (cp.isCommand("stop"))
       {
-        commandIsOk = tryGoToStateIfIdleAndHasDevices(EProtocolState::Stop_Start);
-        if (commandIsOk)
-          isPlaying = false;
+        commandIsOk = command_Stop();
       }
       else if (cp.isCommand("setOutput"))
       {
@@ -358,50 +339,212 @@ void MasterBoard::mainLoop_serialProtocol()
   }
 }
 
+bool MasterBoard::command_Load()
+{
+  if (!isStateBusy())
+  {
+    FILE *file = fopen("/sd/storyboard.json", "r");
+    if (file == NULL)
+    {
+      serial.printf("File not available\n");
+      return false;
+    }
+    else
+    {
+      fseek(file, 0, SEEK_END);
+      long fileSize = ftell(file);
+      fseek(file, 0, SEEK_SET);
+      serial.printf("Reading %i bytes\n", fileSize);
+
+      char *buff = new char[fileSize];
+      fread(buff, fileSize, 1, file);
+      fclose(file);
+
+      serial.printf("Parsing storyboard\n");
+      StoryboardLoader loader(&storyboard, buff);
+      loader.load();
+
+      serial.printf("Loaded %i timelines, duration: %i ms\n",
+                    storyboard.getTimelinesCount(),
+                    storyboard.getDuration());
+      return true;
+    }
+  }
+  else
+  {
+    return false;
+  }
+}
+bool MasterBoard::command_Upload()
+{
+  return tryGoToStateIfIdleAndHasDevices(EProtocolState::SendStoryboard_Start);
+}
+bool MasterBoard::command_Play()
+{
+  if (tryGoToStateIfIdleAndHasDevices(EProtocolState::Play_Start))
+  {
+    isPlaying = true;
+    return true;
+  }
+  return false;
+}
+bool MasterBoard::command_Stop()
+{
+  if (tryGoToStateIfIdleAndHasDevices(EProtocolState::Stop_Start))
+  {
+    isPlaying = false;
+    return true;
+  }
+  return false;
+}
+
 void MasterBoard::mainLoop_keyboard()
 {
   // Check for debounce
   if (inputDebounceTimeout > 0)
     return;
 
-  if (inPlay.read())
-  {
-    serial.printf("play!\n");
-    isDisplayDirty = true;
-    // TODO load();
+  EInputKey releasedKey = EInputKey::Key_None;
 
-    inputDebounceTimeout = InputDebounceTimeoutValue;
-    return;
+  if (pressedKey == EInputKey::Key_None)
+  {
+    if (inPlay.read())
+    {
+      pressedKeyTime = 0;
+      pressedKey = EInputKey::Key_A;
+      inputDebounceTimeout = InputDebounceTimeoutValue;
+    }
+    else if (inStop.read())
+    {
+      pressedKeyTime = 0;
+      pressedKey = EInputKey::Key_B;
+      inputDebounceTimeout = InputDebounceTimeoutValue;
+    }
   }
-  if (inStop.read())
+  else
   {
-    serial.printf("stop!\n");
+    if (pressedKey == EInputKey::Key_A)
+    {
+      if (!inPlay.read())
+      {
+        releasedKey = pressedKey;
+        pressedKey = EInputKey::Key_None;
+      }
+    }
+    else if (pressedKey == EInputKey::Key_B)
+    {
+      if (!inStop.read())
+      {
+        releasedKey = pressedKey;
+        pressedKey = EInputKey::Key_None;
+      }
+    }
+  }
 
-    inputDebounceTimeout = InputDebounceTimeoutValue;
-    return;
+  switch (releasedKey)
+  {
+  case EInputKey::Key_None:
+    break;
+
+  case EInputKey::Key_A:
+    displayState = (EDisplayState)((displayState + 1) % EDisplayState::DisplayStateCount);
+    isDisplayDirty = true;
+    break;
+
+  case EInputKey::Key_B:
+    switch (displayState)
+    {
+    case EDisplayState::Home:
+      break;
+
+    case EDisplayState::DeviceList:
+      break;
+
+    case EDisplayState::Commands:
+      if (pressedKeyTime > 1000)
+      {
+        // Apply current command
+        switch (selectedCommand)
+        {
+        case ECommand::Load:
+          command_Load();
+          break;
+        case ECommand::Upload:
+          command_Upload();
+          break;
+        case ECommand::Play:
+          command_Play();
+          break;
+        case ECommand::Stop:
+          command_Stop();
+          break;
+        }
+      }
+      else
+      {
+        // Go to next command
+        selectedCommand = (ECommand)((selectedCommand + 1) % ECommand::CommandsCount);
+        isDisplayDirty = true;
+      }
+      break;
+
+    case EDisplayState::Stats:
+      break;
+    }
+    break;
   }
 }
 
-void MasterBoard::printDisplay() {
+void MasterBoard::printDisplay()
+{
   if (!isDisplayDirty)
     return;
 
   isDisplayDirty = false;
 
-  switch (displayState) {
-    case EDisplayState::Home:
-      oled.clearDisplay();
-      oled.setTextCursor(0, 0);
-      oled.printf("Net: %s\n", ringNetwork->getIsConnected() ? "connected" : "disconnected");
-      oled.printf("Address: %i\n", ringNetwork->getAddress());
-      oled.printf("Devices: %i\n", enumeratedAddressesCount);
-      oled.printf("Play status: %s\n", isPlaying ? "playing" : "stopped");
-      oled.display();
+  oled.clearDisplay();
+  oled.setTextCursor(0, 0);
+  switch (displayState)
+  {
+  case EDisplayState::Home:
+    //oled.printf("== Il presepe + fico ==\n");
+    oled.printf("== Pimp my presepe ==\n");
+    oled.printf("Net: %s\n", ringNetwork->getIsConnected() ? "connected" : "disconnected");
+    oled.printf("Devices: %i\n", enumeratedAddressesCount);
+    oled.printf("Play status: %s\n", isPlaying ? "playing" : "stopped");
     break;
 
-    case EDisplayState::DeviceList:
+  case EDisplayState::DeviceList:
+    oled.printf("== Devices ==\n");
+    break;
+
+  case EDisplayState::Commands:
+    oled.printf("== Comandi ==\n> ");
+    switch (selectedCommand)
+    {
+    case ECommand::Load:
+      oled.printf("Load\n");
+      break;
+    case ECommand::Upload:
+      oled.printf("Upload\n");
+      break;
+    case ECommand::Play:
+      oled.printf("Play\n");
+      break;
+    case ECommand::Stop:
+      oled.printf("Stop\n");
+      break;
+    }
+    break;
+
+  case EDisplayState::Stats:
+    oled.printf("== Statistiche ==\n");
+    oled.printf("Uptime: %i s\n", upTime / 1000);
+    oled.printf("Conn. lost: %i\n", connectionLostCount);
+    oled.printf("Packets: %i\n", freePacketsCount);
     break;
   }
+  oled.display();
 }
 
 int32_t MasterBoard::findDeviceByHardwareId(uint32_t hardwareId)
@@ -461,6 +604,11 @@ void MasterBoard::tick(millisec timeDelta)
   inputDebounceTimeout -= timeDelta;
   if (inputDebounceTimeout < 0)
     inputDebounceTimeout = 0;
+
+  if (pressedKey != EInputKey::Key_None)
+  {
+    pressedKeyTime += timeDelta;
+  }
 
   upTime += timeDelta;
 

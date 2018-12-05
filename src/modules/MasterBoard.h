@@ -24,17 +24,38 @@ private:
   RingNetwork* ringNetwork;
   uint32_t hardwareId;
   bool lastIsConnected;
+  uint32_t connectionLostCount;
   
   DigitalOut led;
   DigitalIn inPlay;
   DigitalIn inStop;
-  const millisec InputDebounceTimeoutValue = 250;
+  const millisec InputDebounceTimeoutValue = 50;
   millisec inputDebounceTimeout;
+  enum EInputKey {
+    Key_None,
+    Key_A,
+    Key_B
+  };
+  EInputKey pressedKey;
+  millisec pressedKeyTime;
+
   enum EDisplayState {
-    Home,
+    Home = 0,
     DeviceList,
+    Commands,
+    Stats,
+    DisplayStateCount // Dummy entry to read the entries count
   };
   EDisplayState displayState;
+  enum ECommand {
+    Load = 0,
+    Upload,
+    Play,
+    Stop,
+    CommandsCount // Dummy entry to read the entries count
+  };
+  ECommand selectedCommand;
+
   bool isDisplayDirty;
   void printDisplay();
   
@@ -113,6 +134,11 @@ private:
   void mainLoop_keyboard();
   millisec waitStateTimeout;
   bool waitStateTimeoutEnabled;
+
+  bool command_Load();
+  bool command_Upload();
+  bool command_Play();
+  bool command_Stop();
 };
 
 #endif
